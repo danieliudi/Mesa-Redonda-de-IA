@@ -59,8 +59,8 @@ const ALL_AGENTS = [
 ];
 
 const ROUND_DEFS = [
-  { id: "r1", number: 1, title: "ANÁLISE INDEPENDENTE", subtitle: "Cada agente analisa sem ver os outros", color: "#e94560",
-    buildPrompt: (a, c) => ({ system: a.prompt, user: `DESAFIO PARA ANÁLISE:\n${c}\n\nDê sua análise completa.` }) },
+  { id: "r1", number: 1, title: "ANÁLISE INDEPENDENTE + PESQUISA", subtitle: "Cada agente pesquisa dados reais e analisa", color: "#e94560",
+    buildPrompt: (a, c) => ({ system: a.prompt + `\n\nIMPORTANTE: Você tem acesso a web search. USE-O para buscar dados reais, números, benchmarks, cases e informações atualizadas que fortaleçam sua análise. Não fique só na opinião — traga DADOS. Pesquise market size, concorrentes, tendências, preços, custos reais.`, user: `DESAFIO PARA ANÁLISE:\n${c}\n\nPesquise dados reais na web e dê sua análise completa com evidências.` }) },
   { id: "r2", number: 2, title: "DEBATE CRUZADO", subtitle: "Agentes desafiam uns aos outros", color: "#c792ea",
     buildPrompt: (a, c, prev, agents) => {
       const all = agents.map(x => `**${x.name}:** ${prev.r1?.[x.id]||"N/A"}`).join("\n\n---\n\n");
@@ -159,33 +159,47 @@ Estimativa por fase e total.
 Seja EXTREMAMENTE específico e acionável. Cada ação deve ser algo que alguém poderia começar a executar amanhã.
 Português brasileiro. Máximo 1500 palavras.`;
 
-async function callClaude(systemPrompt, userMessage, onStatus, maxTokens = 1200, attachments = []) {
+async function callClaude(systemPrompt, userMessage, onStatus, maxTokens = 1200, attachments = [], useSearch = false) {
   const MAX = 5;
   const DELAYS = [0, 4000, 8000, 15000, 25000];
   const content = attachments.length > 0 ? [...attachments, { type: "text", text: userMessage }] : userMessage;
   for (let i = 0; i < MAX; i++) {
     try {
       if (i > 0) { if (onStatus) onStatus(`Tentativa ${i+1}/${MAX}...`); await new Promise(r => setTimeout(r, DELAYS[i])); }
+      const body = {
+        model: "claude-sonnet-4-20250514",
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: "user", content }]
+      };
+      if (useSearch) {
+        body.tools = [{ type: "web_search_20250305", name: "web_search" }];
+      }
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, system: systemPrompt, messages: [{ role: "user", content }] })
+        body: JSON.stringify(body)
       });
       if (res.status === 429 || res.status === 529) { if (i < MAX-1) continue; }
       if (!res.ok && i < MAX-1) continue;
       const data = await res.json();
       if (data.error && i < MAX-1) continue;
-      const text = data.content?.[0]?.text;
-      if (text) return text;
+      // Extract all text blocks (web search responses have multiple)
+      const textParts = (data.content || [])
+        .filter(b => b.type === "text")
+        .map(b => b.text)
+        .filter(Boolean);
+      if (textParts.length > 0) return textParts.join("\n\n");
       if (i < MAX-1) continue;
     } catch (e) { if (i === MAX-1) return "[Erro — 5 tentativas esgotadas]"; }
   }
   return "[Erro — 5 tentativas esgotadas]";
 }
 
-function generatePDF(challenge, roundData, synthesis, filesList, agents) {
+function generatePDF(challenge, roundData, synthesis, filesList, agents, urlsList) {
   const ts = new Date().toLocaleString("pt-BR");
   const rn = { r1: "RODADA 1 — ANÁLISE INDEPENDENTE", r2: "RODADA 2 — DEBATE CRUZADO", r3: "RODADA 3 — PRÉ-MORTEM", r4: "RODADA 4 — PLANO DE MITIGAÇÃO" };
   const fs = filesList?.length > 0 ? `<div class="fbox"><div class="lb">Arquivos Anexados</div><div class="fl">${filesList.map(f=>`<span class="ft">${f.type==="document"?"📄":f.type==="image"?"🖼️":"📝"} ${f.name}</span>`).join("")}</div></div>` : "";
+  const us = urlsList?.length > 0 ? `<div class="fbox"><div class="lb">URLs Analisadas</div><div class="fl">${urlsList.map(u=>`<span class="ft">🔗 ${u.url}</span>`).join("")}</div></div>` : "";
   let body = "";
   for (const round of ROUND_DEFS) {
     body += `<div class="rh" style="background:${round.color}22;border-left:4px solid ${round.color};color:${round.color};">${rn[round.id]}</div>`;
@@ -207,7 +221,7 @@ function generatePDF(challenge, roundData, synthesis, filesList, agents) {
 </style></head><body>
 <div class="hd"><h1>Mesa Redonda</h1><div class="s">${agents.length} Agentes · 4 Rodadas · ${ts}</div></div>
 <div class="cb"><div class="lb">Desafio</div><div class="tx">${challenge}</div></div>
-${fs}${body}
+${fs}${us}${body}
 <div class="sy"><h2>⚖️ SÍNTESE EXECUTIVA</h2><div class="ct">${synthesis.replace(/\n/g,"<br>")}</div></div>
 <div class="fo">Mesa Redonda — Sistema de Deliberação com IA · ${ts}</div>
 </body></html>`;
@@ -262,7 +276,7 @@ function AgentCard({ agent, analysis, isLoading, roundNum, retryStatus }) {
       </div>
       {isLoading ? (
         <div style={{ color: retryStatus ? "#ee4540" : "rgba(255,255,255,0.4)", fontSize: 13, padding: "10px 0" }}>
-          <span style={{ display: "inline-block", animation: "pulse 1.5s infinite" }}>{retryStatus ? `⚠ ${retryStatus}` : roundNum===3?"Simulando fracasso...":roundNum===4?"Projetando solução...":roundNum===2?"Debatendo...":"Analisando..."}</span>
+          <span style={{ display: "inline-block", animation: "pulse 1.5s infinite" }}>{retryStatus ? `⚠ ${retryStatus}` : roundNum===3?"Simulando fracasso...":roundNum===4?"Projetando solução...":roundNum===2?"Debatendo...":roundNum===1?"🔍 Pesquisando e analisando...":"Analisando..."}</span>
         </div>
       ) : analysis ? (
         <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap", marginTop: 6 }}>{analysis}</div>
@@ -316,6 +330,10 @@ export default function MesaRedonda() {
   // Playbook
   const [playbook, setPlaybook] = useState("");
   const [playbookLoading, setPlaybookLoading] = useState(false);
+  // URLs
+  const [urls, setUrls] = useState([]);
+  const [urlInput, setUrlInput] = useState("");
+  const [urlFetching, setUrlFetching] = useState(false);
 
   const bottomRef = useRef(null);
   const followRef = useRef(null);
@@ -356,7 +374,8 @@ export default function MesaRedonda() {
       synthesis,
       playbook,
       stats,
-      fileNames: files.map(f => f.name)
+      fileNames: files.map(f => f.name),
+      urls: urls.map(u => ({ url: u.url, status: u.status }))
     };
     try {
       await window.storage.set(`debate:${id}`, JSON.stringify(debate));
@@ -419,6 +438,41 @@ export default function MesaRedonda() {
     if (f.type === "image") return { type: "image", source: { type: "base64", media_type: f.mediaType, data: f.data } };
     return { type: "text", text: `[ARQUIVO: ${f.name}]\n${f.text}` };
   });
+
+  // URL handling
+  const addUrl = async () => {
+    let raw = urlInput.trim();
+    if (!raw) return;
+    if (!raw.startsWith("http")) raw = "https://" + raw;
+    try { new URL(raw); } catch { return; }
+    setUrlInput("");
+    setUrlFetching(true);
+    let content = "";
+    let status = "pending";
+    try {
+      const res = await fetch(raw, { signal: AbortSignal.timeout(10000) });
+      if (res.ok) {
+        const text = await res.text();
+        const doc = new DOMParser().parseFromString(text, "text/html");
+        doc.querySelectorAll("script,style,nav,footer,header,aside,iframe,noscript").forEach(el => el.remove());
+        const cleaned = (doc.body?.innerText || "").replace(/\s+/g, " ").trim();
+        content = cleaned.slice(0, 15000);
+        status = content.length > 100 ? "fetched" : "partial";
+      } else { status = "error"; }
+    } catch(e) { status = "error"; }
+    setUrls(prev => [...prev, { url: raw, content, status }]);
+    setUrlFetching(false);
+  };
+
+  const buildUrlContext = () => {
+    if (urls.length === 0) return "";
+    return "\n\n--- URLS FORNECIDAS PARA ANÁLISE ---\n\n" + urls.map((u, i) => {
+      if (u.status === "fetched" && u.content) {
+        return `[URL ${i+1}: ${u.url}]\nCONTEÚDO EXTRAÍDO:\n${u.content}\n`;
+      }
+      return `[URL ${i+1}: ${u.url}]\n(Conteúdo não pôde ser extraído. Analise com base no que você sabe sobre esta URL/domínio.)\n`;
+    }).join("\n---\n\n");
+  };
 
   // Follow-up
   const sendFollowUp = async () => {
@@ -509,18 +563,23 @@ body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a2e;line-height:1.7;p
         scroll();
         const { system, user } = round.buildPrompt(agent, challenge, allRD, agents);
         const atts = round.id === "r1" ? buildAttachments() : [];
-        const um = (round.id === "r1" && files.length > 0)
-          ? `${user}\n\n[${files.length} ARQUIVO(S): ${files.map(f=>f.name).join(", ")}. Analise como contexto.]` : user;
+        const urlCtx = round.id === "r1" ? buildUrlContext() : "";
+        const isR1 = round.id === "r1";
+        let um = user;
+        if (isR1) {
+          if (files.length > 0) um += `\n\n[${files.length} ARQUIVO(S): ${files.map(f=>f.name).join(", ")}. Analise como contexto.]`;
+          if (urls.length > 0) um += urlCtx;
+        }
         const result = await callClaude(system, um, (s) => {
           setRoundData(prev => ({ ...prev, [`${round.id}_status`]: { ...(prev[`${round.id}_status`]||{}), [agent.id]: s } }));
-        }, 1200, atts);
+        }, isR1 ? 2000 : 1200, atts, isR1);
         totalCalls++;
         allRD[round.id][agent.id] = result;
         setRoundData(prev => ({ ...prev, [round.id]: { ...(prev[round.id]||{}), [agent.id]: result } }));
         setStats({ calls: totalCalls, elapsed: Math.round((Date.now()-startTimeRef.current)/1000) });
         setLoadingAgents(prev => { const n = new Set(prev); n.delete(lk); return n; });
         scroll();
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, isR1 ? 2000 : 1500));
       }
     }
 
@@ -553,6 +612,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a2e;line-height:1.7;p
               <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginBottom: 10 }}>
                 {new Date(d.ts).toLocaleString("pt-BR")} · {d.agentIds?.length || "?"} agentes · {d.stats?.elapsed || "?"}s
                 {d.fileNames?.length > 0 && ` · ${d.fileNames.length} arquivo(s)`}
+                {d.urls?.length > 0 && ` · ${d.urls.length} URL(s)`}
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={() => loadDebate(d)} style={{ flex: 1, padding: "8px 0", background: "rgba(233,69,96,0.15)", border: "1px solid rgba(233,69,96,0.3)", borderRadius: 8, color: "#e94560", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Abrir</button>
@@ -577,9 +637,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a2e;line-height:1.7;p
 
       {/* Header */}
       <div style={{ padding: "28px 20px 16px", textAlign: "center" }}>
-        <div style={{ fontSize: 10, letterSpacing: 4, textTransform: "uppercase", color: "rgba(255,255,255,0.3)", marginBottom: 6, fontWeight: 600 }}>SISTEMA DE DELIBERAÇÃO v4</div>
+        <div style={{ fontSize: 10, letterSpacing: 4, textTransform: "uppercase", color: "rgba(255,255,255,0.3)", marginBottom: 6, fontWeight: 600 }}>SISTEMA DE DELIBERAÇÃO v5</div>
         <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0, background: "linear-gradient(135deg,#e94560,#c792ea)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Mesa Redonda</h1>
-        <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginTop: 4 }}>{agents.length} agentes · 4 rodadas · follow-up · biblioteca</p>
+        <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginTop: 4 }}>{agents.length} agentes · web search · 4 rodadas · playbook</p>
         <button onClick={() => setShowLibrary(true)} style={{
           marginTop: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
           borderRadius: 8, color: "rgba(255,255,255,0.5)", fontSize: 11, padding: "6px 16px",
@@ -614,6 +674,44 @@ body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a2e;line-height:1.7;p
                   <span style={{ fontSize: 12 }}>{f.type==="document"?"📄":f.type==="image"?"🖼️":"📝"}</span>
                   <div style={{ flex: 1, fontSize: 11, color: "rgba(255,255,255,0.6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
                   {!isRunning && <button onClick={() => setFiles(prev => prev.filter((_,j) => j!==i))} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.25)", cursor: "pointer", fontSize: 14, padding: 0 }}>×</button>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* URL Input */}
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              value={urlInput}
+              onChange={e => setUrlInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && addUrl()}
+              placeholder="Colar URL para análise..."
+              disabled={isRunning || urlFetching}
+              style={{
+                flex: 1, background: "rgba(255,255,255,0.04)", border: "1px dashed rgba(255,255,255,0.12)",
+                borderRadius: 8, color: "#fff", padding: "9px 12px", fontSize: 11, fontFamily: "inherit"
+              }}
+            />
+            <button onClick={addUrl} disabled={isRunning || urlFetching || !urlInput.trim()} style={{
+              padding: "9px 14px", background: urlFetching ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8,
+              color: "rgba(255,255,255,0.5)", fontSize: 11, cursor: isRunning || urlFetching ? "not-allowed" : "pointer", whiteSpace: "nowrap"
+            }}>{urlFetching ? "..." : "🔗 Adicionar"}</button>
+          </div>
+          {urls.length > 0 && (
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              {urls.map((u, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.03)", borderRadius: 6, padding: "6px 10px", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <span style={{ fontSize: 12 }}>🔗</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.url}</div>
+                    <div style={{ fontSize: 9, color: u.status === "fetched" ? "#16c79a" : u.status === "error" ? "#ee4540" : "rgba(255,255,255,0.3)" }}>
+                      {u.status === "fetched" ? `✓ Conteúdo extraído (${(u.content.length/1000).toFixed(1)}k chars)` : u.status === "error" ? "⚠ Não extraído — agentes analisarão pelo domínio" : "Processando..."}
+                    </div>
+                  </div>
+                  {!isRunning && <button onClick={() => setUrls(prev => prev.filter((_,j) => j!==i))} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.25)", cursor: "pointer", fontSize: 14, padding: 0 }}>×</button>}
                 </div>
               ))}
             </div>
@@ -818,7 +916,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;color:#1a1a2e;line-height:1.7;p
                 style={{ flex: 1, padding: "13px 0", background: "linear-gradient(135deg,#16c79a,#4fc3f7)", border: "none", borderRadius: 10, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5 }}>
                 💾 SALVAR
               </button>
-              <button className="pdf-btn" onClick={() => generatePDF(challenge, roundData, synthesis, files, agents)}
+              <button className="pdf-btn" onClick={() => generatePDF(challenge, roundData, synthesis, files, agents, urls)}
                 style={{ flex: 1, padding: "13px 0", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5 }}>
                 📄 PDF DEBATE
               </button>
