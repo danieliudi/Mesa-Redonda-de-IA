@@ -24,60 +24,49 @@ Você submete um desafio. **11 agentes com perfis distintos** debatem em **4 rod
 
 ### As 4 Rodadas
 
-1. **Análise Independente + Web Search** — Cada agente pesquisa dados reais e analisa pela sua lente
+1. **Análise Independente + Web Search** — Cada agente pesquisa dados reais e analisa
 2. **Debate Cruzado** — Agentes desafiam uns aos outros por nome
 3. **Pré-Mortem** — "É 2028. O projeto fracassou. O que deu errado?"
-4. **Plano de Mitigação** — Ação concreta para evitar cada fracasso identificado
-
-### Síntese Executiva
-
-O Moderador consolida tudo em: Veredicto, Score de Confiança, Consensos, Dissensos, Top 5 Riscos, Insights Munger & Kotler, Playbook de Execução, Kill Criteria e Condições de Sucesso.
+4. **Plano de Mitigação** — Ação concreta para evitar cada fracasso
 
 ## Features
 
-- **Web Search na R1** — Agentes pesquisam dados reais (market size, benchmarks, custos)
-- **Painel de Agentes** — Toggle on/off para montar a mesa sob medida
-- **Anexo de Arquivos** — Upload de PDF, imagens e texto como contexto
-- **Análise de URLs** — Cola URLs para os agentes analisarem
+- **Web Search** — Agentes pesquisam dados reais na R1
+- **Painel de Agentes** — Toggle on/off, preset Mesa Rápida (3 agentes)
+- **Anexo de Arquivos** — PDF, imagens e texto como contexto
+- **Análise de URLs** — Cola URLs para análise
 - **Follow-up Direcionado** — Chat pós-debate com agente específico
-- **Playbook de Execução** — Gera plano detalhado com fases, KPIs e orçamento
-- **Biblioteca de Debates** — Salva e revisita debates anteriores
-- **Export PDF** — Debate completo e playbook exportáveis
+- **Playbook de Execução** — 4 fases, KPIs, orçamento
+- **Biblioteca de Debates** — Salva e revisita debates
+- **Export PDF** — Debate e playbook exportáveis
 
-## Stack
+## Estrutura
 
-- React (artifact Claude.ai)
-- Claude API (Sonnet 4)
-- Web Search Tool API
-- Persistent Storage API
+```
+├── mesa-redonda.jsx      # Versão artifact (Claude.ai)
+├── src/
+│   ├── App.jsx           # Versão web app (deploy)
+│   └── main.jsx          # Entry point React
+├── index.html
+├── package.json
+├── vite.config.js
+└── netlify.toml
+```
 
-## Como Usar
+## Deploy no Netlify
 
-### No Claude.ai (mais simples)
-1. Abra o arquivo `mesa-redonda.jsx` como artifact no Claude.ai
-2. O sistema usa a API do Claude automaticamente
-3. Clique em "Iniciar Debate"
+1. Conecte este repo ao Netlify
+2. Build command: `npm run build` | Publish: `dist`
+3. Acesse a URL, insira sua API key da Anthropic
+4. Comece a debater
 
-### Como Web App (requer backend)
-Para deploy externo, é necessário um backend proxy que segure a API key:
-- Vercel Serverless Functions
-- Cloudflare Workers
-- Node.js + Express
+## Uso no Claude.ai
 
-## Configuração
+O arquivo `mesa-redonda.jsx` funciona como artifact no Claude.ai sem API key.
 
-O sistema usa `claude-sonnet-4-20250514` por padrão. Ajustes disponíveis:
-- `max_tokens`: 1200 (agentes) / 2000 (R1 com search) / 4000 (síntese e playbook)
-- Retry: 5 tentativas com backoff exponencial (0s, 4s, 8s, 15s, 25s)
-- Delay entre agentes: 2s (R1) / 1.5s (R2-R4)
+## Custo
 
-## Custo Estimado por Debate
-
-~45 chamadas ao Sonnet 4 com web search ≈ $0.50–1.50 USD por debate completo (11 agentes, 4 rodadas + síntese + playbook).
-
-## Licença
-
-MIT
+~45 chamadas ao Claude Sonnet ≈ $0.50–1.50 por debate completo.
 
 ---
 
